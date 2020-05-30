@@ -4,6 +4,7 @@ import srcs.workflow.job.*;
 
 import java.lang.annotation.*;
 import java.lang.reflect.*;
+import java.rmi.*;
 import java.util.*;
 import java.util.concurrent.locks.*;
 
@@ -68,7 +69,6 @@ public class JobExecutorParallel extends JobExecutor {
                         //System.out.println("Putting "+s+ " to sleep "+linkFrom.value()+" is not there");
                         conditionMap.get(linkFrom.value()).await();
                         //System.out.println("Waking up "+s);
-
                     }
                 } catch (InterruptedException e) {
                     e.printStackTrace();

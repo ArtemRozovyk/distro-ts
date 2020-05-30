@@ -1,8 +1,9 @@
 package srcs.workflow.job;
 
+import java.io.*;
 import java.util.*;
 
-public abstract class Job {
+public abstract class Job implements Serializable {
     public String getName() {
         return name;
     }

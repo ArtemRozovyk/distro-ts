@@ -60,6 +60,22 @@ public class TaskTracker implements TaskTrackerRemote {
     @Override
     public void registerMaster(MasterRemote masterRemote) throws RemoteException {
         this.masterRemote = masterRemote;
+        (new Thread(()-> {
+            while (true){
+                //send heartBeat ever 4 seconds
+                try {
+                    masterRemote.sendHeartBeat(this,System.currentTimeMillis());
+                    System.out.println("Sent heartbeat "+System.currentTimeMillis());
+                } catch (RemoteException e) {
+                    e.printStackTrace();
+                }
+                try {
+                    Thread.sleep(2000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        })).start();
     }
 
 
@@ -128,7 +144,7 @@ public class TaskTracker implements TaskTrackerRemote {
             try {
                 currTasks++;
                 System.out.println("Sumbitted task "+s+" cur "+currTasks);
-                masterRemote.postTaskResult(s, tryInvokeWithId(job, s));
+                masterRemote.postTaskResult(s, tryInvokeWithId(job, s),this);
             } catch (Exception e) {
                 e.printStackTrace();
             } finally {

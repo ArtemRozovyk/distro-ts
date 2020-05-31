@@ -7,11 +7,12 @@ import java.util.*;
 
 public interface MasterRemote extends Remote {
 
-    void postTaskResult(String oTask, Object result) throws RemoteException;
+    void postTaskResult(String oTask, Object result,TaskTrackerRemote tt) throws RemoteException;
     boolean requirementsMet(String task) throws RemoteException;
     Map<String,Object> resultsRemote()throws RemoteException;
     void reset()throws RemoteException;
     void submitJob(RemoteJobDistributedExecutor executor,Job job) throws RemoteException;
     void registerExecutor(RemoteJobDistributedExecutor executor)throws RemoteException;
     boolean doneJob() throws RemoteException;
+    void sendHeartBeat(TaskTrackerRemote tt, long lastHB) throws RemoteException;
 }

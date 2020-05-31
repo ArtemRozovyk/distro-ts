@@ -31,8 +31,9 @@ public class SystemDeployer {
                 System.getProperty("java.io.tmpdir") + "/" + name_class_jobtracker);
         System.out.println("Started jobtracker");
 
-        Thread.sleep(500);
 
+
+        Thread.sleep(500);
         if (!name_class_tasktracker.equals("")) {
             System.out.println("Starting tasktracker");
             processesTaskTracker = new Process[nb_tasktracker];

@@ -19,15 +19,36 @@ public class JobTrackerMaster implements MasterRemote {
     boolean doneJob;
     Queue<Pair<RemoteJobDistributedExecutor, Job>> jobQueue = new ArrayDeque<>();
     Map<String, Object> resultsMaster;
+
     Set<TaskTrackerRemote> taskTrackerSet;
+    List<CurrentTastTrackerState> trackerStateList;
+
+
     static JobTrackerMaster jobTrackerMaster;
     RemoteJobDistributedExecutor executor;
     Lock trakersLock = new ReentrantLock();
     Condition condition = trakersLock.newCondition();
 
 
+    //HeartBeat
+
+    public static class CurrentTastTrackerState {
+        public Job currJob;
+        TaskTrackerRemote tt;
+        List<String> tasksforTracker;
+        long lastHeartBeat;
+
+        public CurrentTastTrackerState(TaskTrackerRemote tt, List<String> tasksforTracker, long lastHeartBeat) {
+            this.tt = tt;
+            this.tasksforTracker = tasksforTracker;
+            this.lastHeartBeat = lastHeartBeat;
+        }
+    }
+
+
     public JobTrackerMaster(Map<String, Object> resultsMaster) {
         doneJob = false;
+        this.trackerStateList = new ArrayList<>();
         this.resultsMaster = resultsMaster;
         this.taskTrackerSet = new HashSet<>();
         RemoteJobDistributedExecutor executor;
@@ -60,7 +81,7 @@ public class JobTrackerMaster implements MasterRemote {
     }
 
 
-    private void ditributeJob(RemoteJobDistributedExecutor executor,Job job) throws RemoteException {
+    private void ditributeJob(RemoteJobDistributedExecutor executor, Job job) throws RemoteException {
         //pop from queue
         JobValidator jv = null;
         try {
@@ -91,15 +112,22 @@ public class JobTrackerMaster implements MasterRemote {
                 allNode.remove(0);
                 freetracker.initLocks(graph);
                 freetracker.sumbitTask(job, taskTosubmit);
+
+                try {
+                    addStateTrackerTask(freetracker, taskTosubmit, job);
+                } catch (ConnectException e) {
+                    allNode.add(taskTosubmit);
+                }
+
                 System.out.println("Submitted the job " + taskTosubmit);
             }
-            while(resultsMaster.keySet().size()!=graph.size()){
+            while (resultsMaster.keySet().size() != graph.size()) {
                 condition.await(3, TimeUnit.SECONDS);
             }
             executor.notifyDoneJob(resultsMaster);
             //normalement notification de reception...
             //Thread.sleep(2000);
-            resultsMaster=new HashMap<>();
+            resultsMaster = new HashMap<>();
         } catch (InterruptedException e) {
             e.printStackTrace();
         } finally {
@@ -107,6 +135,24 @@ public class JobTrackerMaster implements MasterRemote {
         }
 
 
+    }
+
+    private void addStateTrackerTask(TaskTrackerRemote sender, String taskTosubmit, Job job) throws RemoteException {
+        System.out.println("adding " + sender.getId() + " 's " + taskTosubmit + " to tracker");
+
+        for (CurrentTastTrackerState ttState : trackerStateList) {
+            try{
+
+
+            if (ttState.tt.getId().equals(sender.getId())) {
+                ttState.tasksforTracker.add(taskTosubmit);
+                ttState.currJob = job;
+            }
+            }catch (ConnectException e ){
+                System.out.println("Not adding tracker");
+            }
+
+        }
     }
 
 
@@ -136,6 +182,10 @@ public class JobTrackerMaster implements MasterRemote {
                 try {
                     TaskTrackerRemote rExecService = (TaskTrackerRemote) registry.lookup("tt" + i++);
                     jobTrackerMaster.taskTrackerSet.add(rExecService);
+                    jobTrackerMaster.trackerStateList.add(
+                            new CurrentTastTrackerState(rExecService,
+                                    new ArrayList<>(), System.currentTimeMillis())
+                    );
                     rExecService.registerMaster(jobTrackerMaster);
                     System.out.println("Added tracker " + (i - 1));
                 } catch (NotBoundException e) {
@@ -143,9 +193,11 @@ public class JobTrackerMaster implements MasterRemote {
                     break;
                 }
             }
+            jobTrackerMaster.startMonitoringHeartBeat();
         } catch (RemoteException | InterruptedException e) {
             e.printStackTrace();
         }
+
 
         try {
             Thread.sleep(80000);
@@ -155,21 +207,128 @@ public class JobTrackerMaster implements MasterRemote {
 
     }
 
+    final Object heartHeatLock = new Object();
+
+    private void startMonitoringHeartBeat() {
+
+
+        (new Thread(() -> {
+            //verifyHeartBeat
+            while (true) {
+
+                synchronized (heartHeatLock){
+                //if there is a malfunction get the Lost set and distribute it
+                int i = 0;
+
+                    try {
+                        heartHeatLock.wait();
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+
+
+                    System.out.println("Tt state size "+ trackerStateList.size());
+                List<CurrentTastTrackerState > lToRemove = new ArrayList<>();
+                for (CurrentTastTrackerState ttState : trackerStateList) {
+
+                    long diff = System.currentTimeMillis() - ttState.lastHeartBeat;
+                    System.out.println("Current heart " + (i++) + " beat diff " + TimeUnit.MILLISECONDS.toSeconds(diff));
+                    if (TimeUnit.MILLISECONDS.toSeconds(diff) > 7) {
+                        taskTrackerSet.remove(ttState.tt);
+                        //we lost him
+                        List<String> tasksAffected = ttState.tasksforTracker;
+                        StringBuilder ka= new StringBuilder();
+                        for(String st : tasksAffected){
+                            ka.append(",").append(st);
+                        }
+                        System.out.println("Lost tasks"+ ka);
+                        Job job = ttState.currJob;
+                        TaskTrackerRemote freetracker;
+                        lToRemove.add(ttState);
+                        trakersLock.lock();
+                        try{
+
+
+                        while (!tasksAffected.isEmpty() && !resultsMaster.keySet().containsAll(tasksAffected)) {
+                            while (true) {
+                                try {
+                                    if (((freetracker = getFreeTracker()) != null)) break;
+                                } catch (RemoteException e) {
+                                    e.printStackTrace();
+                                }
+                                System.out.println("No trackers available, sleep heartbeat");
+                                try {
+                                    condition.await(3, TimeUnit.SECONDS);
+                                } catch (InterruptedException e) {
+                                    e.printStackTrace();
+                                }
+                                System.out.println("Woke up, there is a tracker in heartbeat");
+
+                            }
+                            String taskTosubmit = tasksAffected.get(0);
+                            tasksAffected.remove(0);
+                            //freetracker.initLocks(graph); //TODO?
+                            try {
+                                freetracker.sumbitTask(job, taskTosubmit);
+                               // addStateTrackerTask(freetracker, taskTosubmit, job);
+                                System.out.println("Heartbeat sent to new tracer");
+                            } catch (RemoteException e) {
+                                e.printStackTrace();
+                            }
+
+                        }
+                        }finally {
+                            trakersLock.unlock();
+                        }
+
+
+
+
+
+                    }
+
+
+                }
+                trackerStateList.removeAll(lToRemove);
+
+            }}
+        })).start();
+
+
+    }
+
     @Override
-    public void postTaskResult(String oTask, Object result) throws RemoteException {
+    public void postTaskResult(String oTask, Object result, TaskTrackerRemote sender) throws RemoteException {
         trakersLock.lock();
         try {
             System.out.println("Got task result " + oTask + " res : " + result + " " + System.currentTimeMillis());
             resultsMaster.put(oTask, result);
+            removeCurrectTaskFromTracker(sender, oTask);
+
+
             for (TaskTrackerRemote tt : taskTrackerSet) {
-                tt.signal(oTask);
+                try {
+                    tt.signal(oTask);
+                } catch (ConnectException e) {
+                    System.out.println("not sending signal to the broken one");
+                }
+
             }
-            condition.signal();
+            condition.signalAll();
         } finally {
             trakersLock.unlock();
         }
         //notifyAllTaskTrakers on oTask;
 
+    }
+
+    private void removeCurrectTaskFromTracker(TaskTrackerRemote sender, String oTask) throws RemoteException {
+
+        for (CurrentTastTrackerState ttState : trackerStateList) {
+            if (ttState.tt.getId().equals(sender.getId())) {
+                ttState.tasksforTracker.remove(oTask);
+            }
+        }
     }
 
     @Override
@@ -214,13 +373,35 @@ public class JobTrackerMaster implements MasterRemote {
         return doneJob;
     }
 
-    private TaskTrackerRemote getFreeTracker() throws RemoteException {
-        for (TaskTrackerRemote tt : taskTrackerSet) {
-            //System.out.println("cap "+tt.getCapacity()+" > curr "+tt.getCurrentOccupation());
-            if (tt.getCapacity() > tt.getCurrentOccupation()) {
-                return tt;
+    @Override
+    public void sendHeartBeat(TaskTrackerRemote sender, long lastHB) throws RemoteException {
+
+        for (CurrentTastTrackerState ttState : trackerStateList) {
+            if (ttState.tt.getId().equals(sender.getId())) {
+                synchronized (heartHeatLock){
+                    ttState.lastHeartBeat = lastHB;
+                    heartHeatLock.notify();
+                }
             }
         }
+    }
+
+    private TaskTrackerRemote getFreeTracker() throws RemoteException {
+        int i = 0;
+
+            for (TaskTrackerRemote tt : taskTrackerSet) {
+                try {
+                //System.out.println("cap "+tt.getCapacity()+" > curr "+tt.getCurrentOccupation());
+                if (tt.getCapacity() > tt.getCurrentOccupation()) {
+                    i++;
+                    return tt;
+                }
+            } catch (ConnectException e) {
+                System.out.println("Coonection excetpion on " + i);
+            }
+            }
+
+
         return null;
     }
 }

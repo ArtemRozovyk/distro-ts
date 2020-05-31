@@ -11,6 +11,7 @@ public interface MasterRemote extends Remote {
     boolean requirementsMet(String task) throws RemoteException;
     Map<String,Object> resultsRemote()throws RemoteException;
     void reset()throws RemoteException;
-    void submitJob(Job job) throws RemoteException;
-
+    void submitJob(RemoteJobDistributedExecutor executor,Job job) throws RemoteException;
+    void registerExecutor(RemoteJobDistributedExecutor executor)throws RemoteException;
+    boolean doneJob() throws RemoteException;
 }

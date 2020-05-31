@@ -44,10 +44,10 @@ public class TestJobRemoteDistributed extends SystemDeployer {
 			
 			Set<Long> pidtask_trackers = Stream.of(processesTaskTracker)
 					 .map( p -> Long.valueOf(getPidOfProcess(p))).collect(Collectors.toSet());
-			/*
+
 			for(Integer pid_task : job.getMappingTaskPid().values() ) {
 				assertTrue(pidtask_trackers.contains(pid_task.longValue()));
-			}*/
+			}
 		}
 		
 	}

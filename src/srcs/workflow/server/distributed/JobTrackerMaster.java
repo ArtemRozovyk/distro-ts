@@ -9,6 +9,7 @@ import java.rmi.*;
 import java.rmi.registry.*;
 import java.rmi.server.*;
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.concurrent.locks.*;
 
 public class JobTrackerMaster implements MasterRemote {
@@ -18,7 +19,7 @@ public class JobTrackerMaster implements MasterRemote {
 
 
     Map<String,Object> resultsMaster;
-    Set<TaskTracker> taskTrackerSet;
+    Set<TaskTrackerRemote> taskTrackerSet;
     static JobTrackerMaster jobTrackerMaster;
     Lock trakersLock = new ReentrantLock();
     Condition condition=trakersLock.newCondition();
@@ -28,21 +29,7 @@ public class JobTrackerMaster implements MasterRemote {
         this.resultsMaster = resultsMaster;
 
         this.taskTrackerSet=new HashSet<>();
-        Registry registry = null;
-        try {
-            registry = LocateRegistry.getRegistry("localhost");
-            int i=0;
-            while(true){
-                try {
-                    TaskTracker rExecService = (TaskTracker)  registry.lookup("tt"+i++);
-                    taskTrackerSet.add(rExecService);
-                } catch (NotBoundException e) {
-                    break;
-                }
-            }
-        } catch (RemoteException e) {
-            e.printStackTrace();
-        }
+
 
     }
 
@@ -53,7 +40,7 @@ public class JobTrackerMaster implements MasterRemote {
             processBuilder.environment().put("CLASSPATH",
                     "out/production/SRCS_final");
             processBuilder.start();
-            Thread.sleep(3500);
+            Thread.sleep(200);
         } catch (IOException | InterruptedException e) {
             e.printStackTrace();
         }
@@ -64,11 +51,27 @@ public class JobTrackerMaster implements MasterRemote {
             registry = LocateRegistry.getRegistry("localhost");
             UnicastRemoteObject.exportObject(jobTrackerMaster, 0);
             registry.rebind("masterRemote", jobTrackerMaster);
-        } catch (RemoteException e) {
+            System.out.println("Binded master, sleeping");
+            Thread.sleep(800);
+            int i=0;
+
+            while(true){
+                try {
+                    TaskTrackerRemote rExecService = (TaskTrackerRemote)  registry.lookup("tt"+i++);
+                    jobTrackerMaster.taskTrackerSet.add(rExecService);
+                    rExecService.registerMaster(jobTrackerMaster);
+                    System.out.println("Added tracker "+(i-1));
+                } catch (NotBoundException e) {
+                    System.out.println("End of trackers "+i);
+                    break;
+                }
+            }
+        } catch (RemoteException | InterruptedException e) {
             e.printStackTrace();
         }
+
         try {
-            Thread.sleep(20000);
+            Thread.sleep(80000);
         } catch (InterruptedException e) {
             e.printStackTrace();
         }
@@ -79,11 +82,12 @@ public class JobTrackerMaster implements MasterRemote {
     public void postTaskResult(String oTask, Object result) throws RemoteException {
         trakersLock.lock();
         try{
+            System.out.println("Got task result "+ oTask+" res : "+result+" "+System.currentTimeMillis());
             resultsMaster.put(oTask,result);
-            for(TaskTracker tt: taskTrackerSet){
+            for(TaskTrackerRemote tt: taskTrackerSet){
                 tt.signal(oTask);
-                condition.signal();
             }
+            condition.signal();
         }finally {
             trakersLock.unlock();
         }
@@ -104,14 +108,15 @@ public class JobTrackerMaster implements MasterRemote {
 
     @Override
     public Map<String, Object> resultsRemote() throws RemoteException {
-        trakersLock.lock();
-        try{
+
             return resultsMaster;
-        }finally {
-            trakersLock.unlock();
-        }
+
     }
 
+    @Override
+    public void reset() throws RemoteException {
+        resultsMaster=new HashMap<>();
+    }
 
 
     @Override
@@ -133,14 +138,19 @@ public class JobTrackerMaster implements MasterRemote {
         trakersLock.lock();
         try
         {
-            TaskTracker freetracker;
+            TaskTrackerRemote freetracker;
             while(!allNode.isEmpty()&&!resultsMaster.keySet().containsAll(allNode)){
                 while((freetracker=getFreeTracker())==null){
-                    condition.await();
+                    System.out.println("No trackers available, sleep");
+                    condition.await(3, TimeUnit.SECONDS);
+                    System.out.println("Woke up, there is a tracker");
+
                 }
                 String taskTosubmit= allNode.get(0);
                 allNode.remove(0);
-                freetracker.sumbitTask(taskTosubmit);
+                freetracker.initLocks(graph);
+                freetracker.sumbitTask(job,taskTosubmit);
+                System.out.println("Submitted the job "+taskTosubmit);
             }
         } catch (InterruptedException e) {
             e.printStackTrace();
@@ -151,8 +161,9 @@ public class JobTrackerMaster implements MasterRemote {
 
     }
 
-    private TaskTracker getFreeTracker() throws RemoteException {
-        for(TaskTracker tt : taskTrackerSet){
+    private TaskTrackerRemote getFreeTracker() throws RemoteException {
+        for(TaskTrackerRemote tt : taskTrackerSet){
+            //System.out.println("cap "+tt.getCapacity()+" > curr "+tt.getCurrentOccupation());
             if(tt.getCapacity()>tt.getCurrentOccupation()){
                 return tt;
             }

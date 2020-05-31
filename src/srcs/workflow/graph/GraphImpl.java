@@ -1,9 +1,10 @@
 package srcs.workflow.graph;
 
+import java.io.*;
 import java.util.*;
 import java.util.function.*;
 
-public class GraphImpl<T> implements Graph<T> {
+public class GraphImpl<T> implements Graph<T>, Serializable {
 
     Set <T> noeuds;
     Map<T,List<T>> linksOut;

@@ -28,7 +28,8 @@ public class JobExecutorRemoteDistributed extends JobExecutor {
 
 
 
-
-        return masterRemote.resultsRemote();
+        Map<String, Object> results =masterRemote.resultsRemote();
+        masterRemote.reset();
+        return  results;
     }
 }
